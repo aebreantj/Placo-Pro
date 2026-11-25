@@ -238,7 +238,7 @@
     if (!proj.ceiling) {
       proj.ceiling = {
         enabled: false,
-        profileId: proj.profiles.find((p) => p.category === 'plafond')?.id || 'prof-plafond-integra',
+        profileId: proj.profiles.find((p) => p.category === 'plafond')?.id || 'prof-plafond-a',
         autoFromPlan: true,
         customLengthCm: 0,
         customWidthCm: 0

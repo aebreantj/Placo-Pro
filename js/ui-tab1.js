@@ -1,11 +1,22 @@
 /* ============================================================================
  * PLACO PRO — Onglet 1 : Chantier & Paramètres Techniques (DTU 25.41)
+ * Mise en page directe en 3 colonnes côte à côte (sans modale) :
+ *   1. Cloison distributive | 2. Doublage périphérique | 3. Faux plafond
+ * avec cases à cocher par composant, menus déroulants rapides, variantes
+ * multiples et affectation directe exclusive des murs du plan.
  * ============================================================================ */
 (function (global) {
   'use strict';
 
   const C = global.PlacoConstants;
   const Store = global.PlacoStore;
+
+  // Variante active affichée dans chacune des 3 colonnes
+  const activeVariantByCat = {
+    cloison: null,
+    doublage: null,
+    plafond: null
+  };
 
   function esc(str) {
     return String(str == null ? '' : str)
@@ -15,71 +26,627 @@
       .replace(/"/g, '&quot;');
   }
 
-  function formatFaceSummary(face) {
-    if (!face) return 'BA13 Std × 1';
-    const pt = C.PLATE_TYPES[face.plateType] || C.PLATE_TYPES.std;
-    const hTxt = face.plateHeight === 'auto' ? 'H. auto' : `${face.plateHeight} cm`;
-    return `${face.skins === 2 ? 'Double peau' : 'Simple peau'} · ${pt.code} (${hTxt})`;
+  function compOn(prof, key) {
+    return !prof.components || prof.components[key] !== false;
   }
 
-  function formatInsulSummary(ins) {
-    if (!ins || !ins.enabled) return 'Sans isolant';
-    const mat = C.INSULATION_MATERIALS[ins.material] || C.INSULATION_MATERIALS.laine_coton;
-    return `${mat.name} ${ins.thicknessMm} mm`;
+  function ensureComponents(prof) {
+    if (!prof.components) prof.components = {};
+    return prof.components;
   }
 
-  function renderProfileCard(prof) {
-    let catBadge = '<span class="badge badge-blue">Cloison</span>';
-    let detailsHtml = '';
+  function plateTypeOptionsHtml(selected) {
+    const order = ['std', 'hydro', 'feu', 'acoustique', 'haute_durete'];
+    const labels = {
+      std: 'BA13 Std',
+      hydro: 'Hydro H1',
+      feu: 'Feu (PPF)',
+      acoustique: 'Acoustique',
+      haute_durete: 'Haute dureté'
+    };
+    return order.map((id) => `
+      <option value="${id}" ${selected === id ? 'selected' : ''}>${labels[id]}</option>
+    `).join('');
+  }
 
-    if (prof.category === 'cloison') {
-      catBadge = '<span class="badge badge-blue">Cloison</span>';
-      detailsHtml = `
-        <span class="spec-chip">${esc(prof.section)} · Entraxe ${prof.entraxeCm} cm</span>
-        <span class="spec-chip">${prof.montantType === 'double' ? 'Montants doublés dos à dos' : 'Montants simples'}</span>
-        <span class="spec-chip">Face A : ${esc(formatFaceSummary(prof.faceA))}</span>
-        <span class="spec-chip">Face B : ${esc(formatFaceSummary(prof.faceB))}</span>
-        <span class="spec-chip">${esc(formatInsulSummary(prof.insulation))}</span>
-      `;
-    } else if (prof.category === 'doublage') {
-      catBadge = '<span class="badge badge-yellow">Doublage</span>';
-      const sysTxt = prof.doublageSystem === 'optima'
-        ? `Optima 2 (F530 / 60 cm · Appuis ${prof.optimaRange || '75-120'} mm)`
-        : `Ossature indép. ${prof.section} (${prof.entraxeCm} cm, ${prof.montantType === 'double' ? 'doublés' : 'simples'})`;
-      detailsHtml = `
-        <span class="spec-chip">${esc(sysTxt)}</span>
-        <span class="spec-chip">${esc(formatFaceSummary(prof.faceA))}</span>
-        <span class="spec-chip">${esc(formatInsulSummary(prof.insulation))}</span>
-      `;
-    } else {
-      catBadge = '<span class="badge badge-green">Faux Plafond</span>';
-      const susp = C.SUSPENTE_TYPES[prof.suspenteType] || C.SUSPENTE_TYPES.integra2;
-      const suspExtra = prof.suspenteType === 'integra2' ? ` (${prof.integraLength || '200-240'} mm)` : '';
-      detailsHtml = `
-        <span class="spec-chip">F530 entraxe ${prof.entraxeCm} cm · ${prof.periphType || 'CR2'}</span>
-        <span class="spec-chip">${esc(susp.shortLabel + suspExtra)}</span>
-        <span class="spec-chip">${esc(formatFaceSummary(prof.faceA))}</span>
-        <span class="spec-chip">${esc(formatInsulSummary(prof.insulation))}</span>
-      `;
+  function plateHeightOptionsHtml(selected) {
+    const val = String(selected || 'auto');
+    return `
+      <option value="auto" ${val === 'auto' ? 'selected' : ''}>H. Auto</option>
+      ${C.PLATE_HEIGHTS_CM.map((h) => `<option value="${h}" ${val === String(h) ? 'selected' : ''}>${h} cm</option>`).join('')}
+    `;
+  }
+
+  function insulationMaterialOptionsHtml(selected) {
+    const labels = {
+      laine_coton: 'Laine de coton ★',
+      laine_verre: 'Laine de verre',
+      laine_roche: 'Laine de roche',
+      fibre_bois: 'Fibre de bois'
+    };
+    return Object.keys(labels).map((id) => `
+      <option value="${id}" ${(selected || 'laine_coton') === id ? 'selected' : ''}>${labels[id]}</option>
+    `).join('');
+  }
+
+  function thicknessOptionsHtml(list, selected) {
+    const selNum = Number(selected);
+    const items = list.slice();
+    if (selNum && !items.includes(selNum)) {
+      items.push(selNum);
+      items.sort((a, b) => a - b);
     }
+    return items.map((t) => `<option value="${t}" ${selNum === t ? 'selected' : ''}>${t} mm</option>`).join('');
+  }
+
+  function getActiveVariant(variants, category) {
+    if (!variants.length) return null;
+    const saved = activeVariantByCat[category];
+    const found = variants.find((v) => v.id === saved);
+    if (found) return found;
+    activeVariantByCat[category] = variants[0].id;
+    return variants[0];
+  }
+
+  function countAssignedWalls(walls, profileId) {
+    return (walls || []).filter((w) => w.profileId === profileId).length;
+  }
+
+  /**
+   * Construit l'encadré bas "Murs / Zones affectés à ce gabarit" pour Cloison & Doublage.
+   */
+  function renderWallAssignmentBox(prof, proj) {
+    const walls = proj.walls || [];
+    const profilesById = {};
+    (proj.profiles || []).forEach((p) => { profilesById[p.id] = p; });
+
+    const assignedHere = walls.filter((w) => w.profileId === prof.id);
+    const totalMl = assignedHere.reduce((s, w) => s + (Number(w.lengthCm) || 0) / 100, 0);
+    const totalM2 = assignedHere.reduce((s, w) => {
+      const hAvg = ((Number(w.hLeftCm) || 250) + (Number(w.hRightCm) || 250)) / 2;
+      return s + ((Number(w.lengthCm) || 0) * hAvg) / 10000;
+    }, 0);
 
     return `
-      <div class="profile-card" data-profile-id="${esc(prof.id)}">
-        <div class="row-between">
-          <div class="row" style="gap:8px;min-width:0;flex:1;">
-            <span class="profile-swatch" style="background:${esc(prof.color || '#F5C518')}"></span>
-            <strong style="font-size:13px;overflow:hidden;text-overflow:ellipsis;">${esc(prof.name)}</strong>
-          </div>
-          ${catBadge}
+      <div class="wall-assign-box">
+        <div class="wall-assign-title">
+          <span>Murs / Zones affectés à ce gabarit</span>
+          <span class="badge badge-slate">${assignedHere.length}/${walls.length}</span>
         </div>
-        <div class="profile-specs">${detailsHtml}</div>
-        <div class="row-between" style="margin-top:auto;padding-top:4px;border-top:1px solid rgba(38,54,79,0.5);">
-          <button type="button" class="btn btn-sm btn-blue" data-action="edit-profile" data-id="${esc(prof.id)}">✏️ Configurer</button>
-          <div class="row" style="gap:6px;">
-            <button type="button" class="btn btn-sm" data-action="dup-profile" data-id="${esc(prof.id)}" title="Dupliquer ce profil">⧉</button>
-            <button type="button" class="btn btn-sm btn-danger" data-action="del-profile" data-id="${esc(prof.id)}" title="Supprimer ce profil">🗑️</button>
+        ${walls.length ? `
+          <div class="wall-assign-list">
+            ${walls.map((w) => {
+              const isHere = w.profileId === prof.id;
+              const otherProf = !isHere && w.profileId ? profilesById[w.profileId] : null;
+              const lenM = ((Number(w.lengthCm) || 0) / 100).toFixed(2).replace('.', ',');
+              return `
+                <label class="wall-assign-row ${isHere ? 'assigned-here' : (otherProf ? 'assigned-other' : '')}">
+                  <span style="display:flex;align-items:center;gap:7px;min-width:0;flex:1;">
+                    <input type="checkbox" class="chk-assign-wall"
+                           data-prof="${esc(prof.id)}" data-wall="${esc(w.id)}"
+                           ${isHere ? 'checked' : ''} />
+                    <span style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(w.name)}</span>
+                  </span>
+                  <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+                    ${otherProf ? `<span style="font-size:10px;color:var(--text-muted);max-width:95px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="Actuellement affecté à : ${esc(otherProf.name)}">→ ${esc(otherProf.name)}</span>` : ''}
+                    ${!isHere && !otherProf ? '<span style="font-size:10px;color:#F87171;">Non affecté</span>' : ''}
+                    <span class="wall-assign-meta">${Math.round(w.lengthCm)} cm (${lenM} m)</span>
+                  </span>
+                </label>
+              `;
+            }).join('')}
+          </div>
+          <div class="wall-assign-footer">
+            <span>${assignedHere.length} mur(s) · ${totalMl.toFixed(2).replace('.', ',')} ml</span>
+            <span>${totalM2.toFixed(2).replace('.', ',')} m²</span>
+          </div>
+        ` : `
+          <div style="font-size:11.5px;color:var(--text-muted);line-height:1.4;">
+            Aucun mur tracé pour le moment. Tracez vos murs dans l'onglet <strong>2. Croquis</strong> puis cochez-les directement ici.
+          </div>
+        `}
+      </div>
+    `;
+  }
+
+  /**
+   * Construit l'encadré bas "Zone affectée" pour la Colonne 3 — Faux plafond.
+   */
+  function renderCeilingAssignmentBox(prof, proj, calc) {
+    const ceil = proj.ceiling || { enabled: false, profileId: prof.id, autoFromPlan: true, customLengthCm: 0, customWidthCm: 0 };
+    const isAssignedHere = Boolean(ceil.enabled && ceil.profileId === prof.id);
+    const planGeom = (calc && calc.planGeom) || { areaM2: 0, perimeterMl: 0 };
+    const hasPlanArea = planGeom.areaM2 > 0.1;
+
+    return `
+      <div class="wall-assign-box">
+        <div class="wall-assign-title">
+          <span>Zones / Plafond affecté à ce gabarit</span>
+          <span class="badge ${isAssignedHere ? 'badge-green' : 'badge-slate'}">${isAssignedHere ? 'Actif' : 'Inactif'}</span>
+        </div>
+
+        <label class="wall-assign-row ${isAssignedHere ? 'assigned-here' : ''}">
+          <span style="display:flex;align-items:center;gap:7px;">
+            <input type="checkbox" class="chk-assign-ceiling" data-prof="${esc(prof.id)}" ${isAssignedHere ? 'checked' : ''} />
+            <span style="font-weight:700;">Faux plafond de la pièce</span>
+          </span>
+          <span class="wall-assign-meta">
+            ${isAssignedHere && calc.ceilingResult ? `${calc.ceilingResult.areaM2} m²` : (hasPlanArea ? `${planGeom.areaM2} m²` : '0 m²')}
+          </span>
+        </label>
+
+        ${isAssignedHere ? `
+          <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-sub);cursor:pointer;">
+            <input type="checkbox" id="t1-ceil-auto" ${ceil.autoFromPlan ? 'checked' : ''} style="accent-color:var(--blue);" />
+            <span>Auto depuis le plan (${planGeom.areaM2} m² · pér. ${planGeom.perimeterMl} ml)</span>
+          </label>
+          ${(!ceil.autoFromPlan || !hasPlanArea) ? `
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+              <input type="number" id="t1-ceil-len" class="comp-select mono" min="50" max="3000"
+                     value="${ceil.customLengthCm || ''}" placeholder="Long. (cm)" aria-label="Longueur plafond cm" />
+              <input type="number" id="t1-ceil-wid" class="comp-select mono" min="50" max="3000"
+                     value="${ceil.customWidthCm || ''}" placeholder="Larg. (cm)" aria-label="Largeur plafond cm" />
+            </div>
+          ` : ''}
+          ${calc.ceilingResult ? `
+            <div class="wall-assign-footer">
+              <span>Pér. ${calc.ceilingResult.perimeterMl} ml</span>
+              <span>${calc.ceilingResult.areaM2} m² · ${calc.ceilingResult.totalPlates} pl.</span>
+            </div>
+          ` : ''}
+        ` : `
+          <div style="font-size:11.5px;color:var(--text-muted);">
+            Cochez ci-dessus pour inclure le faux plafond dans le calepinage et la commande.
+          </div>
+        `}
+      </div>
+    `;
+  }
+
+  /**
+   * En-tête + barre de variantes commune à chaque colonne.
+   */
+  function renderColumnHeaderAndVariants(cat, title, icon, variants, active, proj) {
+    const walls = proj.walls || [];
+    const ceil = proj.ceiling || {};
+    return `
+      <div class="config-col-header">
+        <h3 class="config-col-title">${icon} ${esc(title)}</h3>
+        <button type="button" class="btn btn-sm btn-blue btn-add-variant" data-cat="${cat}">+ Variante</button>
+      </div>
+      <div class="variant-bar">
+        ${variants.map((v, idx) => {
+          const isAct = active && v.id === active.id;
+          const cnt = cat === 'plafond'
+            ? (ceil.enabled && ceil.profileId === v.id ? 1 : 0)
+            : countAssignedWalls(walls, v.id);
+          const letter = String.fromCharCode(65 + (idx % 26));
+          return `
+            <button type="button" class="variant-pill ${isAct ? 'active' : ''}" data-select-variant="${esc(v.id)}" data-cat="${cat}">
+              <span class="v-dot" style="background:${esc(v.color || '#F5C518')}"></span>
+              <span>Var. ${letter}</span>
+              ${cnt > 0 ? `<span style="font-family:var(--font-mono);opacity:0.85;">(${cnt})</span>` : ''}
+            </button>
+          `;
+        }).join('')}
+      </div>
+      ${active ? `
+        <div class="variant-name-bar">
+          <input type="text" class="input inp-variant-name" data-prof="${esc(active.id)}" value="${esc(active.name)}" aria-label="Nom de la variante" />
+          ${variants.length > 1 ? `<button type="button" class="btn btn-sm btn-danger btn-del-variant" data-prof="${esc(active.id)}" data-cat="${cat}" title="Supprimer cette variante">🗑️</button>` : ''}
+        </div>
+      ` : ''}
+    `;
+  }
+
+  /**
+   * COLONNE 1 : CLOISON DISTRIBUTIVE
+   */
+  function renderColCloison(variants, proj) {
+    const p = getActiveVariant(variants, 'cloison');
+    if (!p) return '';
+    const sec = p.section || 'M48';
+    const rOn = compOn(p, 'rails');
+    const mOn = compOn(p, 'montants');
+    const iOn = Boolean(p.insulation && p.insulation.enabled);
+    const faOn = compOn(p, 'faceA');
+    const fbOn = compOn(p, 'faceB');
+    const brOn = compOn(p, 'bandeResiliente');
+    const fa = p.faceA || { skins: 1, plateType: 'std', plateHeight: 'auto' };
+    const fb = p.faceB || { skins: 1, plateType: 'std', plateHeight: 'auto' };
+
+    return `
+      <div class="config-col col-cloison" data-col-prof="${esc(p.id)}">
+        ${renderColumnHeaderAndVariants('cloison', '1. Cloison distributive', '🧱', variants, p, proj)}
+        <div class="config-col-body">
+          <!-- Rails -->
+          <div class="comp-row ${rOn ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-comp="rails" ${rOn ? 'checked' : ''} />
+                <span>Rails</span>
+              </label>
+              <select class="comp-select mono" style="max-width:120px;" data-p="${esc(p.id)}" data-field="section" ${rOn ? '' : 'disabled'}>
+                <option value="M48" ${sec === 'M48' ? 'selected' : ''}>R48</option>
+                <option value="M70" ${sec === 'M70' ? 'selected' : ''}>R70</option>
+                <option value="M90" ${sec === 'M90' ? 'selected' : ''}>R90</option>
+                <option value="M100" ${sec === 'M100' ? 'selected' : ''}>R100</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Montants (synchronisés avec Rails) -->
+          <div class="comp-row ${mOn ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-comp="montants" ${mOn ? 'checked' : ''} />
+                <span>Montants</span>
+              </label>
+              <select class="comp-select mono" style="max-width:120px;" data-p="${esc(p.id)}" data-field="section" ${mOn ? '' : 'disabled'}>
+                <option value="M48" ${sec === 'M48' ? 'selected' : ''}>M48</option>
+                <option value="M70" ${sec === 'M70' ? 'selected' : ''}>M70</option>
+                <option value="M90" ${sec === 'M90' ? 'selected' : ''}>M90</option>
+                <option value="M100" ${sec === 'M100' ? 'selected' : ''}>M100</option>
+              </select>
+            </div>
+            <div class="comp-controls">
+              <select class="comp-select mono" data-p="${esc(p.id)}" data-field="entraxeCm" ${mOn ? '' : 'disabled'}>
+                <option value="60" ${Number(p.entraxeCm) === 60 ? 'selected' : ''}>Entraxe 60 cm</option>
+                <option value="40" ${Number(p.entraxeCm) === 40 ? 'selected' : ''}>Entraxe 40 cm</option>
+              </select>
+              <select class="comp-select" data-p="${esc(p.id)}" data-field="montantType" ${mOn ? '' : 'disabled'}>
+                <option value="simple" ${p.montantType !== 'double' ? 'selected' : ''}>Simples</option>
+                <option value="double" ${p.montantType === 'double' ? 'selected' : ''}>Doublés dos à dos</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Isolant -->
+          <div class="comp-row ${iOn ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-ins-toggle="1" ${iOn ? 'checked' : ''} />
+                <span>Isolant</span>
+              </label>
+            </div>
+            <div class="comp-controls">
+              <select class="comp-select" data-p="${esc(p.id)}" data-ins-field="material" ${iOn ? '' : 'disabled'}>
+                ${insulationMaterialOptionsHtml(p.insulation && p.insulation.material)}
+              </select>
+              <select class="comp-select mono" style="max-width:105px;" data-p="${esc(p.id)}" data-ins-field="thicknessMm" ${iOn ? '' : 'disabled'}>
+                ${thicknessOptionsHtml([50, 60, 80, 100], (p.insulation && p.insulation.thicknessMm) || 50)}
+              </select>
+            </div>
+          </div>
+
+          <!-- Parement Face A -->
+          <div class="comp-row ${faOn ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-comp="faceA" ${faOn ? 'checked' : ''} />
+                <span>Parement Face A</span>
+              </label>
+            </div>
+            <div class="comp-controls">
+              <select class="comp-select" data-p="${esc(p.id)}" data-face="faceA" data-ff="skins" ${faOn ? '' : 'disabled'}>
+                <option value="1" ${Number(fa.skins) === 1 ? 'selected' : ''}>Simple peau</option>
+                <option value="2" ${Number(fa.skins) === 2 ? 'selected' : ''}>Double peau</option>
+              </select>
+              <select class="comp-select" data-p="${esc(p.id)}" data-face="faceA" data-ff="plateType" ${faOn ? '' : 'disabled'}>
+                ${plateTypeOptionsHtml(fa.plateType)}
+              </select>
+              <select class="comp-select mono" style="max-width:95px;" data-p="${esc(p.id)}" data-face="faceA" data-ff="plateHeight" ${faOn ? '' : 'disabled'}>
+                ${plateHeightOptionsHtml(fa.plateHeight)}
+              </select>
+            </div>
+          </div>
+
+          <!-- Parement Face B -->
+          <div class="comp-row ${fbOn ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-comp="faceB" ${fbOn ? 'checked' : ''} />
+                <span>Parement Face B</span>
+              </label>
+            </div>
+            <div class="comp-controls">
+              <select class="comp-select" data-p="${esc(p.id)}" data-face="faceB" data-ff="skins" ${fbOn ? '' : 'disabled'}>
+                <option value="1" ${Number(fb.skins) === 1 ? 'selected' : ''}>Simple peau</option>
+                <option value="2" ${Number(fb.skins) === 2 ? 'selected' : ''}>Double peau</option>
+              </select>
+              <select class="comp-select" data-p="${esc(p.id)}" data-face="faceB" data-ff="plateType" ${fbOn ? '' : 'disabled'}>
+                ${plateTypeOptionsHtml(fb.plateType)}
+              </select>
+              <select class="comp-select mono" style="max-width:95px;" data-p="${esc(p.id)}" data-face="faceB" data-ff="plateHeight" ${fbOn ? '' : 'disabled'}>
+                ${plateHeightOptionsHtml(fb.plateHeight)}
+              </select>
+            </div>
+          </div>
+
+          <!-- Bande résiliente acoustique -->
+          <div class="comp-row ${brOn ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-comp="bandeResiliente" ${brOn ? 'checked' : ''} />
+                <span>Bande résiliente acoustique</span>
+              </label>
+              <span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);">sous rail bas</span>
+            </div>
           </div>
         </div>
+        ${renderWallAssignmentBox(p, proj)}
+      </div>
+    `;
+  }
+
+  /**
+   * COLONNE 2 : DOUBLAGE DES MURS PÉRIPHÉRIQUES
+   */
+  function renderColDoublage(variants, proj) {
+    const p = getActiveVariant(variants, 'doublage');
+    if (!p) return '';
+    const isOptima = (p.doublageSystem || 'optima') === 'optima';
+    const sec = p.section || 'M70';
+    const f530On = compOn(p, 'f530');
+    const lissesOn = compOn(p, 'lisses');
+    const appuisOn = compOn(p, 'appuis');
+    const rOn = compOn(p, 'rails');
+    const mOn = compOn(p, 'montants');
+    const iOn = Boolean(p.insulation && p.insulation.enabled);
+    const faOn = compOn(p, 'faceA');
+    const fa = p.faceA || { skins: 1, plateType: 'std', plateHeight: 'auto' };
+
+    return `
+      <div class="config-col col-doublage" data-col-prof="${esc(p.id)}">
+        ${renderColumnHeaderAndVariants('doublage', '2. Doublage murs périphériques', '🛡️', variants, p, proj)}
+        <div class="config-col-body">
+          <!-- Sélecteur de système en haut de colonne -->
+          <div class="sys-switch-bar">
+            <button type="button" class="${isOptima ? 'active' : ''}" data-p="${esc(p.id)}" data-set-doublage="optima">
+              Système Optima<br/><span style="font-weight:500;font-size:10px;opacity:0.85;">Appuis + Fourrures</span>
+            </button>
+            <button type="button" class="${!isOptima ? 'active' : ''}" data-p="${esc(p.id)}" data-set-doublage="independant">
+              Ossature indép.<br/><span style="font-weight:500;font-size:10px;opacity:0.85;">Rails + Montants</span>
+            </button>
+          </div>
+
+          ${isOptima ? `
+            <!-- Fourrures F530 + Lisses Clip -->
+            <div class="comp-row ${f530On ? '' : 'disabled'}">
+              <div class="comp-row-head">
+                <label class="comp-check">
+                  <input type="checkbox" data-p="${esc(p.id)}" data-comp="f530" ${f530On ? 'checked' : ''} />
+                  <span>Fourrures F530</span>
+                </label>
+                <span class="badge badge-slate" style="font-family:var(--font-mono);">Entraxe 60 cm</span>
+              </div>
+            </div>
+
+            <div class="comp-row ${lissesOn ? '' : 'disabled'}">
+              <div class="comp-row-head">
+                <label class="comp-check">
+                  <input type="checkbox" data-p="${esc(p.id)}" data-comp="lisses" ${lissesOn ? 'checked' : ''} />
+                  <span>Lisses basses / hautes Clip</span>
+                </label>
+                <span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);">3,00 m</span>
+              </div>
+            </div>
+
+            <!-- Appuis muraux réglables -->
+            <div class="comp-row ${appuisOn ? '' : 'disabled'}">
+              <div class="comp-row-head">
+                <label class="comp-check">
+                  <input type="checkbox" data-p="${esc(p.id)}" data-comp="appuis" ${appuisOn ? 'checked' : ''} />
+                  <span>Appuis muraux réglables</span>
+                </label>
+              </div>
+              <div class="comp-controls">
+                <select class="comp-select mono" data-p="${esc(p.id)}" data-field="optimaRange" ${appuisOn ? '' : 'disabled'}>
+                  ${C.OPTIMA_RANGES.map((r) => `<option value="${r.id}" ${(p.optimaRange || '75-120') === r.id ? 'selected' : ''}>${esc(r.label)}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+          ` : `
+            <!-- Rails -->
+            <div class="comp-row ${rOn ? '' : 'disabled'}">
+              <div class="comp-row-head">
+                <label class="comp-check">
+                  <input type="checkbox" data-p="${esc(p.id)}" data-comp="rails" ${rOn ? 'checked' : ''} />
+                  <span>Rails</span>
+                </label>
+                <select class="comp-select mono" style="max-width:120px;" data-p="${esc(p.id)}" data-field="section" ${rOn ? '' : 'disabled'}>
+                  <option value="M48" ${sec === 'M48' ? 'selected' : ''}>R48</option>
+                  <option value="M70" ${sec === 'M70' ? 'selected' : ''}>R70</option>
+                  <option value="M90" ${sec === 'M90' ? 'selected' : ''}>R90</option>
+                  <option value="M100" ${sec === 'M100' ? 'selected' : ''}>R100</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Montants -->
+            <div class="comp-row ${mOn ? '' : 'disabled'}">
+              <div class="comp-row-head">
+                <label class="comp-check">
+                  <input type="checkbox" data-p="${esc(p.id)}" data-comp="montants" ${mOn ? 'checked' : ''} />
+                  <span>Montants</span>
+                </label>
+                <select class="comp-select mono" style="max-width:120px;" data-p="${esc(p.id)}" data-field="section" ${mOn ? '' : 'disabled'}>
+                  <option value="M48" ${sec === 'M48' ? 'selected' : ''}>M48</option>
+                  <option value="M70" ${sec === 'M70' ? 'selected' : ''}>M70</option>
+                  <option value="M90" ${sec === 'M90' ? 'selected' : ''}>M90</option>
+                  <option value="M100" ${sec === 'M100' ? 'selected' : ''}>M100</option>
+                </select>
+              </div>
+              <div class="comp-controls">
+                <select class="comp-select mono" data-p="${esc(p.id)}" data-field="entraxeCm" ${mOn ? '' : 'disabled'}>
+                  <option value="60" ${Number(p.entraxeCm) === 60 ? 'selected' : ''}>Entraxe 60 cm</option>
+                  <option value="40" ${Number(p.entraxeCm) === 40 ? 'selected' : ''}>Entraxe 40 cm</option>
+                </select>
+                <select class="comp-select" data-p="${esc(p.id)}" data-field="montantType" ${mOn ? '' : 'disabled'}>
+                  <option value="simple" ${p.montantType !== 'double' ? 'selected' : ''}>Simples</option>
+                  <option value="double" ${p.montantType === 'double' ? 'selected' : ''}>Doublés</option>
+                </select>
+              </div>
+            </div>
+          `}
+
+          <!-- Isolant -->
+          <div class="comp-row ${iOn ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-ins-toggle="1" ${iOn ? 'checked' : ''} />
+                <span>Isolant</span>
+              </label>
+            </div>
+            <div class="comp-controls">
+              <select class="comp-select" data-p="${esc(p.id)}" data-ins-field="material" ${iOn ? '' : 'disabled'}>
+                ${insulationMaterialOptionsHtml(p.insulation && p.insulation.material)}
+              </select>
+              <select class="comp-select mono" style="max-width:105px;" data-p="${esc(p.id)}" data-ins-field="thicknessMm" ${iOn ? '' : 'disabled'}>
+                ${thicknessOptionsHtml([50, 60, 80, 100, 120, 145], (p.insulation && p.insulation.thicknessMm) || 100)}
+              </select>
+            </div>
+          </div>
+
+          <!-- Parement -->
+          <div class="comp-row ${faOn ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-comp="faceA" ${faOn ? 'checked' : ''} />
+                <span>Parement</span>
+              </label>
+            </div>
+            <div class="comp-controls">
+              <select class="comp-select" data-p="${esc(p.id)}" data-face="faceA" data-ff="skins" ${faOn ? '' : 'disabled'}>
+                <option value="1" ${Number(fa.skins) === 1 ? 'selected' : ''}>Simple peau</option>
+                <option value="2" ${Number(fa.skins) === 2 ? 'selected' : ''}>Double peau</option>
+              </select>
+              <select class="comp-select" data-p="${esc(p.id)}" data-face="faceA" data-ff="plateType" ${faOn ? '' : 'disabled'}>
+                ${plateTypeOptionsHtml(fa.plateType)}
+              </select>
+              <select class="comp-select mono" style="max-width:95px;" data-p="${esc(p.id)}" data-face="faceA" data-ff="plateHeight" ${faOn ? '' : 'disabled'}>
+                ${plateHeightOptionsHtml(fa.plateHeight)}
+              </select>
+            </div>
+          </div>
+        </div>
+        ${renderWallAssignmentBox(p, proj)}
+      </div>
+    `;
+  }
+
+  /**
+   * COLONNE 3 : FAUX PLAFOND
+   */
+  function renderColPlafond(variants, proj, calc) {
+    const p = getActiveVariant(variants, 'plafond');
+    if (!p) return '';
+    const f530On = compOn(p, 'f530');
+    const periphOn = compOn(p, 'periph');
+    const suspOn = compOn(p, 'suspentes');
+    const iOn = Boolean(p.insulation && p.insulation.enabled);
+    const faOn = compOn(p, 'faceA');
+    const fa = p.faceA || { skins: 1, plateType: 'std', plateHeight: 'auto' };
+    const suspType = p.suspenteType || 'integra2';
+
+    return `
+      <div class="config-col col-plafond" data-col-prof="${esc(p.id)}">
+        ${renderColumnHeaderAndVariants('plafond', '3. Faux plafond', '⬜', variants, p, proj)}
+        <div class="config-col-body">
+          <!-- Fourrures F530 -->
+          <div class="comp-row ${f530On ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-comp="f530" ${f530On ? 'checked' : ''} />
+                <span>Fourrures F530</span>
+              </label>
+              <select class="comp-select mono" style="max-width:135px;" data-p="${esc(p.id)}" data-field="entraxeCm" ${f530On ? '' : 'disabled'}>
+                <option value="50" ${Number(p.entraxeCm) === 50 ? 'selected' : ''}>Entraxe 50 cm</option>
+                <option value="60" ${Number(p.entraxeCm) === 60 ? 'selected' : ''}>Entraxe 60 cm</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Cornières périphériques CR2 -->
+          <div class="comp-row ${periphOn ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-comp="periph" ${periphOn ? 'checked' : ''} />
+                <span>Cornières périph. CR2</span>
+              </label>
+              <select class="comp-select" style="max-width:125px;" data-p="${esc(p.id)}" data-field="periphType" ${periphOn ? '' : 'disabled'}>
+                <option value="CR2" ${(p.periphType || 'CR2') === 'CR2' ? 'selected' : ''}>Cornières CR2</option>
+                <option value="lisse" ${p.periphType === 'lisse' ? 'selected' : ''}>Lisses Clip</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Suspentes -->
+          <div class="comp-row ${suspOn ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-comp="suspentes" ${suspOn ? 'checked' : ''} />
+                <span>Suspentes</span>
+              </label>
+            </div>
+            <div class="comp-controls">
+              <select class="comp-select" data-p="${esc(p.id)}" data-field="suspenteType" ${suspOn ? '' : 'disabled'}>
+                <option value="integra2" ${suspType === 'integra2' ? 'selected' : ''}>Suspentes à piquer Integra 2</option>
+                <option value="classique_bois" ${suspType === 'classique_bois' ? 'selected' : ''}>Suspentes classiques bois</option>
+                <option value="classique_tige" ${suspType === 'classique_tige' ? 'selected' : ''}>Pivots + tiges filetées M6</option>
+              </select>
+              ${suspType === 'integra2' ? `
+                <select class="comp-select mono" data-p="${esc(p.id)}" data-field="integraLength" ${suspOn ? '' : 'disabled'}>
+                  ${C.INTEGRA2_LENGTHS.map((il) => `<option value="${il.id}" ${(p.integraLength || '200-240') === il.id ? 'selected' : ''}>Long. ${il.id} mm</option>`).join('')}
+                </select>
+              ` : (suspType === 'classique_tige' ? `
+                <input type="number" class="comp-select mono" min="10" max="200" data-p="${esc(p.id)}" data-field="plenumCm"
+                       value="${esc(p.plenumCm || 20)}" placeholder="Plénum cm" title="Hauteur de plénum en cm" ${suspOn ? '' : 'disabled'} />
+              ` : '')}
+            </div>
+          </div>
+
+          <!-- Isolant plafond -->
+          <div class="comp-row ${iOn ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-ins-toggle="1" ${iOn ? 'checked' : ''} />
+                <span>Isolant</span>
+              </label>
+            </div>
+            <div class="comp-controls">
+              <select class="comp-select" data-p="${esc(p.id)}" data-ins-field="material" ${iOn ? '' : 'disabled'}>
+                ${insulationMaterialOptionsHtml(p.insulation && p.insulation.material)}
+              </select>
+              <select class="comp-select mono" style="max-width:105px;" data-p="${esc(p.id)}" data-ins-field="thicknessMm" ${iOn ? '' : 'disabled'}>
+                ${thicknessOptionsHtml([100, 120, 145, 200], (p.insulation && p.insulation.thicknessMm) || 200)}
+              </select>
+            </div>
+          </div>
+
+          <!-- Parement plafond -->
+          <div class="comp-row ${faOn ? '' : 'disabled'}">
+            <div class="comp-row-head">
+              <label class="comp-check">
+                <input type="checkbox" data-p="${esc(p.id)}" data-comp="faceA" ${faOn ? 'checked' : ''} />
+                <span>Parement</span>
+              </label>
+            </div>
+            <div class="comp-controls">
+              <select class="comp-select" data-p="${esc(p.id)}" data-face="faceA" data-ff="skins" ${faOn ? '' : 'disabled'}>
+                <option value="1" ${Number(fa.skins) === 1 ? 'selected' : ''}>Simple peau</option>
+                <option value="2" ${Number(fa.skins) === 2 ? 'selected' : ''}>Double peau</option>
+              </select>
+              <select class="comp-select" data-p="${esc(p.id)}" data-face="faceA" data-ff="plateType" ${faOn ? '' : 'disabled'}>
+                ${plateTypeOptionsHtml(fa.plateType)}
+              </select>
+              <select class="comp-select mono" style="max-width:95px;" data-p="${esc(p.id)}" data-face="faceA" data-ff="plateHeight" ${faOn ? '' : 'disabled'}>
+                ${plateHeightOptionsHtml(fa.plateHeight)}
+              </select>
+            </div>
+          </div>
+        </div>
+        ${renderCeilingAssignmentBox(p, proj, calc)}
       </div>
     `;
   }
@@ -158,61 +725,30 @@
               <span>📐</span>
               <div style="flex:1;">
                 <strong>Suggestion hauteur de plaque optimale :</strong> ${esc(hSuggestion.reason)}
-                <div style="margin-top:4px;font-size:11.5px;opacity:0.85;">
-                  Les profils réglés sur « Hauteur automatique » adoptent automatiquement des plaques de <strong>120 × ${hSuggestion.heightCm} cm</strong> (modifiable par mur si rampant ou hauteur spécifique).
-                </div>
               </div>
               <button type="button" class="btn btn-sm" id="btn-apply-h-all" title="Appliquer cette hauteur à tous les murs existants">Appliquer à tous les murs</button>
             </div>
           </div>
         </section>
 
-        <!-- PROFILS D'OUVRAGES RÉUTILISABLES (DTU 25.41) -->
-        <section class="card">
-          <div class="card-header">
-            <h2 class="card-title">📐 Profils d'ouvrages réutilisables sur le plan (DTU 25.41)</h2>
-            <div class="row">
-              <button type="button" class="btn btn-sm btn-blue" data-action="new-profile" data-cat="cloison">+ Cloison</button>
-              <button type="button" class="btn btn-sm btn-primary" data-action="new-profile" data-cat="doublage">+ Doublage</button>
-              <button type="button" class="btn btn-sm" data-action="new-profile" data-cat="plafond" style="border-color:rgba(34,197,94,0.5);color:#4ADE80;">+ Faux plafond</button>
+        <!-- PARAMÈTRES TECHNIQUES EN 3 COLONNES DIRECTES (SANS MODALE) -->
+        <section class="stack" style="gap:10px;">
+          <div class="row-between">
+            <div>
+              <h2 style="margin:0;font-size:15px;font-weight:800;color:var(--text-main);">
+                📐 Paramètres techniques &amp; Gabarits d'ouvrages (DTU 25.41)
+              </h2>
+              <div style="font-size:12px;color:var(--text-sub);">
+                Cochez/décochez chaque composant, ajustez les menus déroulants directement et cochez les murs affectés en bas de colonne.
+              </div>
             </div>
+            <button type="button" class="btn btn-sm btn-primary" id="btn-go-sketch-top">Passer au Croquis (Onglet 2) →</button>
           </div>
-          <div class="card-body stack">
-            <div>
-              <div class="row-between" style="margin-bottom:8px;">
-                <h3 style="margin:0;font-size:13px;color:var(--blue);text-transform:uppercase;letter-spacing:0.5px;">
-                  1. Cloisons de distribution (M48 / M70 / M90 / M100 · Face A &amp; Face B indépendantes)
-                </h3>
-                <span class="badge badge-slate">${cloisons.length} profil(s)</span>
-              </div>
-              <div class="profile-grid">
-                ${cloisons.map(renderProfileCard).join('')}
-              </div>
-            </div>
 
-            <div>
-              <div class="row-between" style="margin-bottom:8px;">
-                <h3 style="margin:0;font-size:13px;color:var(--yellow);text-transform:uppercase;letter-spacing:0.5px;">
-                  2. Doublages murs périphériques (Ossature indépendante ou Appuis Optima 2)
-                </h3>
-                <span class="badge badge-slate">${doublages.length} profil(s)</span>
-              </div>
-              <div class="profile-grid">
-                ${doublages.map(renderProfileCard).join('')}
-              </div>
-            </div>
-
-            <div>
-              <div class="row-between" style="margin-bottom:8px;">
-                <h3 style="margin:0;font-size:13px;color:#4ADE80;text-transform:uppercase;letter-spacing:0.5px;">
-                  3. Faux plafonds sur ossature métallique F530 (Classiques ou Integra 2)
-                </h3>
-                <span class="badge badge-slate">${plafonds.length} profil(s)</span>
-              </div>
-              <div class="profile-grid">
-                ${plafonds.map(renderProfileCard).join('')}
-              </div>
-            </div>
+          <div class="config-columns-3">
+            ${renderColCloison(cloisons, proj)}
+            ${renderColDoublage(doublages, proj)}
+            ${renderColPlafond(plafonds, proj, calc)}
           </div>
         </section>
 
@@ -281,7 +817,17 @@
     bindEvents(container, proj, appApi);
   }
 
+  function mutateProfile(profileId, mutator) {
+    const proj = Store.getActiveProject();
+    const target = (proj.profiles || []).find((p) => p.id === profileId);
+    if (!target) return;
+    const copy = Store.deepClone(target);
+    mutator(copy);
+    Store.upsertProfile(copy);
+  }
+
   function bindEvents(container, proj, appApi) {
+    // --- Gestion du chantier ---
     container.querySelector('#select-project').addEventListener('change', (e) => {
       const targetId = e.target.value;
       if (!targetId) {
@@ -298,6 +844,9 @@
       }
       const opened = Store.openSavedProject(targetId);
       if (opened) {
+        activeVariantByCat.cloison = null;
+        activeVariantByCat.doublage = null;
+        activeVariantByCat.plafond = null;
         appApi.toast(`Chantier "${opened.clientName}" ouvert`);
       }
     });
@@ -307,7 +856,11 @@
     });
 
     container.querySelector('#btn-new-blank').addEventListener('click', () => {
-      appApi.requestBlankProject();
+      if (appApi.requestBlankProject()) {
+        activeVariantByCat.cloison = null;
+        activeVariantByCat.doublage = null;
+        activeVariantByCat.plafond = null;
+      }
     });
 
     container.querySelector('#btn-save-project').addEventListener('click', () => {
@@ -352,8 +905,8 @@
     });
 
     container.querySelector('#btn-apply-h-all').addEventListener('click', () => {
-      const h = Number(Store.getActiveProject().defaultHeightCm) || 250;
       const p = Store.getActiveProject();
+      const h = Number(p.defaultHeightCm) || 250;
       if (!p.walls.length) {
         appApi.toast('Aucun mur tracé pour le moment');
         return;
@@ -363,7 +916,152 @@
       appApi.toast(`Hauteur ${h} cm appliquée à ${next.length} mur(s)`);
     });
 
-    // Segmented preferences
+    // --- Variantes dans les 3 colonnes ---
+    container.querySelectorAll('.btn-add-variant').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const cat = btn.dataset.cat;
+        const curList = Store.getActiveProject().profiles.filter((p) => p.category === cat);
+        const created = C.createBlankVariant(cat, curList.length);
+        activeVariantByCat[cat] = created.id;
+        Store.upsertProfile(created);
+        appApi.toast(`Nouvelle variante ajoutée : ${created.name}`);
+      });
+    });
+
+    container.querySelectorAll('[data-select-variant]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        activeVariantByCat[btn.dataset.cat] = btn.dataset.selectVariant;
+        appApi.rerender();
+      });
+    });
+
+    container.querySelectorAll('.inp-variant-name').forEach((inp) => {
+      inp.addEventListener('change', () => {
+        mutateProfile(inp.dataset.prof, (p) => {
+          p.name = inp.value.trim() || p.name;
+        });
+      });
+    });
+
+    container.querySelectorAll('.btn-del-variant').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const cat = btn.dataset.cat;
+        if (Store.deleteProfile(btn.dataset.prof)) {
+          activeVariantByCat[cat] = null;
+          appApi.toast('Variante supprimée');
+        } else {
+          appApi.toast('Conservez au moins une variante par colonne.');
+        }
+      });
+    });
+
+    // --- Toggle système Doublage (Optima vs Ossature indépendante) ---
+    container.querySelectorAll('[data-set-doublage]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const sys = btn.dataset.setDoublage;
+        mutateProfile(btn.dataset.p, (p) => {
+          p.doublageSystem = sys;
+          if (sys === 'optima' && p.insulation) {
+            p.optimaRange = C.suggestOptimaRange(p.insulation.thicknessMm);
+          }
+        });
+      });
+    });
+
+    // --- Cases à cocher composants (Rails, Montants, F530, Lisses, Appuis, Face A, Face B, Bande résiliente, CR2, Suspentes) ---
+    container.querySelectorAll('input[data-comp]').forEach((chk) => {
+      chk.addEventListener('change', () => {
+        const key = chk.dataset.comp;
+        mutateProfile(chk.dataset.p, (p) => {
+          const c = ensureComponents(p);
+          c[key] = chk.checked;
+        });
+      });
+    });
+
+    // --- Champs directs du profil (section R/M synchronisée, entraxe, montantType, optimaRange, periphType, suspenteType, integraLength, plenumCm) ---
+    container.querySelectorAll('[data-field]').forEach((el) => {
+      el.addEventListener('change', () => {
+        const field = el.dataset.field;
+        const val = (field === 'entraxeCm' || field === 'plenumCm') ? Number(el.value) : el.value;
+        mutateProfile(el.dataset.p, (p) => {
+          p[field] = val;
+        });
+      });
+    });
+
+    // --- Isolant (case à cocher + nature + épaisseur avec auto-adaptation Optima 2 / Integra 2) ---
+    container.querySelectorAll('input[data-ins-toggle]').forEach((chk) => {
+      chk.addEventListener('change', () => {
+        mutateProfile(chk.dataset.p, (p) => {
+          if (!p.insulation) p.insulation = { enabled: chk.checked, material: 'laine_coton', thicknessMm: 80 };
+          p.insulation.enabled = chk.checked;
+        });
+      });
+    });
+
+    container.querySelectorAll('[data-ins-field]').forEach((el) => {
+      el.addEventListener('change', () => {
+        const field = el.dataset.insField;
+        mutateProfile(el.dataset.p, (p) => {
+          if (!p.insulation) p.insulation = { enabled: true, material: 'laine_coton', thicknessMm: 80 };
+          p.insulation[field] = field === 'thicknessMm' ? Number(el.value) : el.value;
+          if (field === 'thicknessMm') {
+            if (p.category === 'doublage' && (p.doublageSystem || 'optima') === 'optima') {
+              p.optimaRange = C.suggestOptimaRange(p.insulation.thicknessMm);
+            } else if (p.category === 'plafond' && (p.suspenteType || 'integra2') === 'integra2') {
+              p.integraLength = C.suggestIntegraLength(p.insulation.thicknessMm);
+            }
+          }
+        });
+      });
+    });
+
+    // --- Parements Face A / Face B ---
+    container.querySelectorAll('[data-face]').forEach((el) => {
+      el.addEventListener('change', () => {
+        const faceKey = el.dataset.face;
+        const ff = el.dataset.ff;
+        mutateProfile(el.dataset.p, (p) => {
+          if (!p[faceKey]) p[faceKey] = { skins: 1, plateType: 'std', plateHeight: 'auto' };
+          p[faceKey][ff] = ff === 'skins' ? Number(el.value) : el.value;
+        });
+      });
+    });
+
+    // --- Affectation directe exclusive des murs du plan ---
+    container.querySelectorAll('.chk-assign-wall').forEach((chk) => {
+      chk.addEventListener('change', () => {
+        const wallId = chk.dataset.wall;
+        const profId = chk.dataset.prof;
+        // Un mur ne peut appartenir qu'à un seul gabarit : cocher ici le retire automatiquement des autres
+        Store.updateWall(wallId, { profileId: chk.checked ? profId : null });
+      });
+    });
+
+    // --- Affectation directe du faux plafond ---
+    container.querySelectorAll('.chk-assign-ceiling').forEach((chk) => {
+      chk.addEventListener('change', () => {
+        const profId = chk.dataset.prof;
+        if (chk.checked) {
+          Store.updateCeiling({ enabled: true, profileId: profId });
+        } else {
+          Store.updateCeiling({ enabled: false });
+        }
+      });
+    });
+
+    container.querySelector('#t1-ceil-auto')?.addEventListener('change', (e) => {
+      Store.updateCeiling({ autoFromPlan: e.target.checked });
+    });
+    container.querySelector('#t1-ceil-len')?.addEventListener('change', (e) => {
+      Store.updateCeiling({ customLengthCm: Math.max(50, Number(e.target.value) || 0), autoFromPlan: false });
+    });
+    container.querySelector('#t1-ceil-wid')?.addEventListener('change', (e) => {
+      Store.updateCeiling({ customWidthCm: Math.max(50, Number(e.target.value) || 0), autoFromPlan: false });
+    });
+
+    // --- Préférences consommables & Sync ---
     container.querySelectorAll('#seg-enduit button').forEach((btn) => {
       btn.addEventListener('click', () => Store.updateConsumablePrefs({ enduitUnit: btn.dataset.val }));
     });
@@ -374,7 +1072,6 @@
       btn.addEventListener('click', () => Store.updateConsumablePrefs({ safetyMarginPct: Number(btn.dataset.val) }));
     });
 
-    // Sync inputs
     container.querySelector('#inp-gas-url').addEventListener('change', (e) => {
       Store.updateSyncSettings({ webhookUrl: e.target.value.trim() });
     });
@@ -395,401 +1092,10 @@
         global.PlacoOrder.openGasModal(appApi);
       }
     });
-    container.querySelector('#btn-go-sketch').addEventListener('click', () => {
-      Store.setActiveTab('tab2');
-    });
 
-    // Profile actions
-    container.querySelectorAll('[data-action="new-profile"]').forEach((btn) => {
-      btn.addEventListener('click', () => openProfileModal(null, btn.dataset.cat, appApi));
-    });
-    container.querySelectorAll('[data-action="edit-profile"]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const target = Store.getActiveProject().profiles.find((p) => p.id === btn.dataset.id);
-        if (target) openProfileModal(target, target.category, appApi);
-      });
-    });
-    container.querySelectorAll('[data-action="dup-profile"]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const target = Store.getActiveProject().profiles.find((p) => p.id === btn.dataset.id);
-        if (!target) return;
-        const copy = Store.deepClone(target);
-        copy.id = Store.uid('prof');
-        copy.name = `${target.name} (Copie)`;
-        Store.upsertProfile(copy);
-        appApi.toast('Profil dupliqué');
-      });
-    });
-    container.querySelectorAll('[data-action="del-profile"]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        if (!Store.deleteProfile(btn.dataset.id)) {
-          appApi.toast('Impossible : conservez au moins 1 profil par catégorie.');
-        } else {
-          appApi.toast('Profil supprimé');
-        }
-      });
-    });
-  }
-
-  function buildFaceEditorHtml(prefix, title, face) {
-    const f = face || { skins: 1, plateType: 'std', plateHeight: 'auto' };
-    return `
-      <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:12px;">
-        <div style="font-weight:700;font-size:12.5px;margin-bottom:10px;color:var(--yellow);">${esc(title)}</div>
-        <div class="grid-3">
-          <div class="field">
-            <label>Parement (peaux)</label>
-            <select id="${prefix}-skins" class="select">
-              <option value="1" ${Number(f.skins) === 1 ? 'selected' : ''}>Simple peau (1 plaque)</option>
-              <option value="2" ${Number(f.skins) === 2 ? 'selected' : ''}>Double peau (décalage 60 cm)</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>Type de plaque BA13</label>
-            <select id="${prefix}-plate-type" class="select">
-              ${Object.values(C.PLATE_TYPES).map((pt) => `
-                <option value="${pt.id}" ${f.plateType === pt.id ? 'selected' : ''}>${esc(pt.name)}</option>
-              `).join('')}
-            </select>
-          </div>
-          <div class="field">
-            <label>Hauteur plaque (larg. 120 cm)</label>
-            <select id="${prefix}-plate-h" class="select mono">
-              <option value="auto" ${f.plateHeight === 'auto' ? 'selected' : ''}>Automatique (optimale)</option>
-              ${C.PLATE_HEIGHTS_CM.map((h) => `
-                <option value="${h}" ${String(f.plateHeight) === String(h) ? 'selected' : ''}>${h} cm</option>
-              `).join('')}
-            </select>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  function openProfileModal(existing, category, appApi) {
-    const root = document.getElementById('modal-root');
-    const isNew = !existing;
-    const cat = existing ? existing.category : (category || 'cloison');
-    const draft = existing ? Store.deepClone(existing) : {
-      id: Store.uid('prof'),
-      category: cat,
-      name: cat === 'cloison' ? 'Nouvelle Cloison M70' : (cat === 'doublage' ? 'Nouveau Doublage Optima 2' : 'Nouveau Faux Plafond F530'),
-      color: cat === 'cloison' ? '#38BDF8' : (cat === 'doublage' ? '#F5C518' : '#22C55E'),
-      section: 'M70',
-      entraxeCm: cat === 'plafond' ? 50 : 60,
-      montantType: 'simple',
-      doublageSystem: 'optima',
-      optimaRange: '75-120',
-      periphType: 'CR2',
-      suspenteType: 'integra2',
-      integraLength: '200-240',
-      plenumCm: 20,
-      faceA: { skins: 1, plateType: 'std', plateHeight: 'auto' },
-      faceB: { skins: 1, plateType: 'std', plateHeight: 'auto' },
-      insulation: { enabled: true, material: 'laine_coton', thicknessMm: cat === 'plafond' ? 200 : (cat === 'doublage' ? 100 : 60) }
-    };
-
-    const thicknesses = cat === 'plafond' ? C.INSULATION_THICKNESSES_CEILING : C.INSULATION_THICKNESSES_WALL;
-
-    function renderModalContent() {
-      let specificHtml = '';
-      if (cat === 'cloison') {
-        specificHtml = `
-          <div class="grid-3">
-            <div class="field">
-              <label>Section ossature (Rail + Montant)</label>
-              <select id="pm-section" class="select mono">
-                ${Object.values(C.FRAME_SECTIONS).map((s) => `<option value="${s.id}" ${draft.section === s.id ? 'selected' : ''}>${s.id} (${s.rail} + ${s.montant})</option>`).join('')}
-              </select>
-            </div>
-            <div class="field">
-              <label>Entraxe des montants</label>
-              <select id="pm-entraxe" class="select mono">
-                <option value="60" ${Number(draft.entraxeCm) === 60 ? 'selected' : ''}>60 cm (standard DTU)</option>
-                <option value="40" ${Number(draft.entraxeCm) === 40 ? 'selected' : ''}>40 cm (renforcé / faïence)</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Type de montants</label>
-              <select id="pm-montant-type" class="select">
-                <option value="simple" ${draft.montantType !== 'double' ? 'selected' : ''}>Simples</option>
-                <option value="double" ${draft.montantType === 'double' ? 'selected' : ''}>Doublés dos à dos (grande hauteur)</option>
-              </select>
-            </div>
-          </div>
-          ${buildFaceEditorHtml('pm-fa', 'Parement Face A (côté 1)', draft.faceA)}
-          ${buildFaceEditorHtml('pm-fb', 'Parement Face B (côté 2 — indépendant)', draft.faceB)}
-        `;
-      } else if (cat === 'doublage') {
-        const isOptima = draft.doublageSystem === 'optima';
-        specificHtml = `
-          <div class="field">
-            <label>Système de doublage périphérique</label>
-            <div class="segmented" id="pm-doublage-sys">
-              <button type="button" data-val="optima" class="${isOptima ? 'active' : ''}">Option B : Appuis réglables Optima 2 (F530)</button>
-              <button type="button" data-val="independant" class="${!isOptima ? 'active' : ''}">Option A : Ossature indépendante (R/M)</button>
-            </div>
-          </div>
-          ${isOptima ? `
-            <div class="grid-2">
-              <div class="field">
-                <label>Plage de réglage Appuis Optima 2</label>
-                <select id="pm-optima-range" class="select">
-                  ${C.OPTIMA_RANGES.map((r) => `<option value="${r.id}" ${draft.optimaRange === r.id ? 'selected' : ''}>${esc(r.label)}</option>`).join('')}
-                </select>
-              </div>
-              <div class="field">
-                <label>Fourrures F530 + Lisses Clip</label>
-                <input class="input mono" type="text" disabled value="Entraxe 60 cm · 1 à 2 appuis/fourrure" />
-              </div>
-            </div>
-          ` : `
-            <div class="grid-3">
-              <div class="field">
-                <label>Section ossature</label>
-                <select id="pm-section" class="select mono">
-                  ${Object.values(C.FRAME_SECTIONS).map((s) => `<option value="${s.id}" ${draft.section === s.id ? 'selected' : ''}>${s.id} (${s.rail} / ${s.montant})</option>`).join('')}
-                </select>
-              </div>
-              <div class="field">
-                <label>Entraxe montants</label>
-                <select id="pm-entraxe" class="select mono">
-                  <option value="60" ${Number(draft.entraxeCm) === 60 ? 'selected' : ''}>60 cm</option>
-                  <option value="40" ${Number(draft.entraxeCm) === 40 ? 'selected' : ''}>40 cm</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>Montants</label>
-                <select id="pm-montant-type" class="select">
-                  <option value="simple" ${draft.montantType !== 'double' ? 'selected' : ''}>Simples</option>
-                  <option value="double" ${draft.montantType === 'double' ? 'selected' : ''}>Doublés dos à dos</option>
-                </select>
-              </div>
-            </div>
-          `}
-          ${buildFaceEditorHtml('pm-fa', 'Parement Doublage', draft.faceA)}
-        `;
-      } else {
-        specificHtml = `
-          <div class="grid-2">
-            <div class="field">
-              <label>Entraxe Fourrures F530</label>
-              <select id="pm-entraxe" class="select mono">
-                <option value="50" ${Number(draft.entraxeCm) === 50 ? 'selected' : ''}>50 cm (pose perpendiculaire aux F530)</option>
-                <option value="60" ${Number(draft.entraxeCm) === 60 ? 'selected' : ''}>60 cm (pose parallèle / standard)</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Profilé périphérique</label>
-              <select id="pm-periph" class="select">
-                <option value="CR2" ${draft.periphType !== 'lisse' ? 'selected' : ''}>Cornières périphériques CR2 (3 m)</option>
-                <option value="lisse" ${draft.periphType === 'lisse' ? 'selected' : ''}>Lisses périphériques Clip (3 m)</option>
-              </select>
-            </div>
-          </div>
-          <div class="grid-2">
-            <div class="field">
-              <label>Type de suspentes</label>
-              <select id="pm-suspente-type" class="select">
-                ${Object.values(C.SUSPENTE_TYPES).map((s) => `<option value="${s.id}" ${draft.suspenteType === s.id ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}
-              </select>
-            </div>
-            ${draft.suspenteType === 'integra2' ? `
-              <div class="field">
-                <label>Longueur Integra 2 (selon isolant)</label>
-                <select id="pm-integra-len" class="select">
-                  ${C.INTEGRA2_LENGTHS.map((il) => `<option value="${il.id}" ${draft.integraLength === il.id ? 'selected' : ''}>${esc(il.label)}</option>`).join('')}
-                </select>
-              </div>
-            ` : (draft.suspenteType === 'classique_tige' ? `
-              <div class="field">
-                <label>Hauteur de plénum (pour tiges filetées M6)</label>
-                <div class="input-group">
-                  <input id="pm-plenum" class="input mono" type="number" min="10" max="200" value="${esc(draft.plenumCm || 20)}" />
-                  <span class="input-addon">cm</span>
-                </div>
-              </div>
-            ` : `
-              <div class="field">
-                <label>Fixation sur solives bois</label>
-                <input class="input" disabled value="1 suspente / 1,20 m max (~2,2–2,5/m²)" />
-              </div>
-            `)}
-          </div>
-          ${buildFaceEditorHtml('pm-fa', 'Parement Faux Plafond', draft.faceA)}
-        `;
-      }
-
-      const insOn = draft.insulation && draft.insulation.enabled;
-      root.innerHTML = `
-        <div class="modal-backdrop" id="pm-backdrop">
-          <div class="modal-box">
-            <div class="card-header">
-              <h3 class="card-title">${isNew ? 'Nouveau profil' : 'Modifier le profil'} — ${cat === 'cloison' ? 'Cloison' : (cat === 'doublage' ? 'Doublage' : 'Faux Plafond')}</h3>
-              <button type="button" class="btn btn-sm btn-ghost" id="pm-close">✕</button>
-            </div>
-            <div class="card-body stack">
-              <div class="grid-2">
-                <div class="field">
-                  <label>Nom du profil (affiché sur le plan)</label>
-                  <input id="pm-name" class="input" type="text" value="${esc(draft.name)}" />
-                </div>
-                <div class="field">
-                  <label>Couleur d'identification sur le croquis</label>
-                  <div class="row">
-                    ${['#F5C518', '#38BDF8', '#22C55E', '#E2E8F0', '#F43F5E', '#FB923C', '#A78BFA'].map((col) => `
-                      <button type="button" class="pm-color-btn" data-col="${col}" style="width:28px;height:28px;border-radius:6px;background:${col};border:2px solid ${draft.color === col ? '#fff' : 'transparent'};cursor:pointer;"></button>
-                    `).join('')}
-                  </div>
-                </div>
-              </div>
-
-              ${specificHtml}
-
-              <!-- Isolation -->
-              <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:12px;">
-                <div class="row-between" style="margin-bottom:10px;">
-                  <strong style="font-size:12.5px;color:#4ADE80;">🌿 Isolation thermique &amp; acoustique</strong>
-                  <div class="segmented" id="pm-ins-toggle">
-                    <button type="button" data-val="on" class="${insOn ? 'active' : ''}">Avec isolation</button>
-                    <button type="button" data-val="off" class="${!insOn ? 'active' : ''}">Sans isolation</button>
-                  </div>
-                </div>
-                ${insOn ? `
-                  <div class="grid-2">
-                    <div class="field">
-                      <label>Matériau isolant</label>
-                      <select id="pm-ins-mat" class="select">
-                        ${Object.values(C.INSULATION_MATERIALS).map((m) => `
-                          <option value="${m.id}" ${draft.insulation.material === m.id ? 'selected' : ''}>
-                            ${esc(m.name)}${m.priority ? ' ★ (Prioritaire)' : ''}
-                          </option>
-                        `).join('')}
-                      </select>
-                    </div>
-                    <div class="field">
-                      <label>Épaisseur isolant</label>
-                      <select id="pm-ins-thick" class="select mono">
-                        ${thicknesses.map((t) => `<option value="${t}" ${Number(draft.insulation.thicknessMm) === t ? 'selected' : ''}>${t} mm</option>`).join('')}
-                      </select>
-                    </div>
-                  </div>
-                ` : '<div style="font-size:12px;color:var(--text-muted);">Aucun isolant comptabilisé pour cet ouvrage.</div>'}
-              </div>
-
-              <div class="row-between" style="padding-top:6px;">
-                <button type="button" class="btn" id="pm-cancel">Annuler</button>
-                <button type="button" class="btn btn-primary" id="pm-save">✔ Enregistrer le profil</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      `;
-
-      // Bind modal interactive re-renders
-      const syncDraftFromInputs = () => {
-        const nameEl = root.querySelector('#pm-name');
-        if (nameEl) draft.name = nameEl.value.trim() || draft.name;
-        const secEl = root.querySelector('#pm-section');
-        if (secEl) draft.section = secEl.value;
-        const entEl = root.querySelector('#pm-entraxe');
-        if (entEl) draft.entraxeCm = Number(entEl.value);
-        const mtEl = root.querySelector('#pm-montant-type');
-        if (mtEl) draft.montantType = mtEl.value;
-        const optEl = root.querySelector('#pm-optima-range');
-        if (optEl) draft.optimaRange = optEl.value;
-        const perEl = root.querySelector('#pm-periph');
-        if (perEl) draft.periphType = perEl.value;
-        const susEl = root.querySelector('#pm-suspente-type');
-        if (susEl) draft.suspenteType = susEl.value;
-        const intEl = root.querySelector('#pm-integra-len');
-        if (intEl) draft.integraLength = intEl.value;
-        const plEl = root.querySelector('#pm-plenum');
-        if (plEl) draft.plenumCm = Number(plEl.value) || 20;
-
-        const faS = root.querySelector('#pm-fa-skins');
-        if (faS) {
-          draft.faceA = {
-            skins: Number(faS.value),
-            plateType: root.querySelector('#pm-fa-plate-type').value,
-            plateHeight: root.querySelector('#pm-fa-plate-h').value
-          };
-        }
-        const fbS = root.querySelector('#pm-fb-skins');
-        if (fbS) {
-          draft.faceB = {
-            skins: Number(fbS.value),
-            plateType: root.querySelector('#pm-fb-plate-type').value,
-            plateHeight: root.querySelector('#pm-fb-plate-h').value
-          };
-        }
-        const imEl = root.querySelector('#pm-ins-mat');
-        if (imEl) draft.insulation.material = imEl.value;
-        const itEl = root.querySelector('#pm-ins-thick');
-        if (itEl) draft.insulation.thicknessMm = Number(itEl.value);
-      };
-
-      root.querySelectorAll('.pm-color-btn').forEach((b) => {
-        b.addEventListener('click', () => {
-          syncDraftFromInputs();
-          draft.color = b.dataset.col;
-          renderModalContent();
-        });
-      });
-
-      root.querySelectorAll('#pm-doublage-sys button').forEach((b) => {
-        b.addEventListener('click', () => {
-          syncDraftFromInputs();
-          draft.doublageSystem = b.dataset.val;
-          renderModalContent();
-        });
-      });
-
-      const suspSel = root.querySelector('#pm-suspente-type');
-      if (suspSel) {
-        suspSel.addEventListener('change', () => {
-          syncDraftFromInputs();
-          renderModalContent();
-        });
-      }
-
-      root.querySelectorAll('#pm-ins-toggle button').forEach((b) => {
-        b.addEventListener('click', () => {
-          syncDraftFromInputs();
-          draft.insulation.enabled = b.dataset.val === 'on';
-          renderModalContent();
-        });
-      });
-
-      const itSel = root.querySelector('#pm-ins-thick');
-      if (itSel) {
-        itSel.addEventListener('change', () => {
-          syncDraftFromInputs();
-          if (cat === 'doublage' && draft.doublageSystem === 'optima') {
-            draft.optimaRange = C.suggestOptimaRange(draft.insulation.thicknessMm);
-            renderModalContent();
-          } else if (cat === 'plafond' && draft.suspenteType === 'integra2') {
-            draft.integraLength = C.suggestIntegraLength(draft.insulation.thicknessMm);
-            renderModalContent();
-          }
-        });
-      }
-
-      const close = () => { root.innerHTML = ''; };
-      root.querySelector('#pm-close').addEventListener('click', close);
-      root.querySelector('#pm-cancel').addEventListener('click', close);
-      root.querySelector('#pm-backdrop').addEventListener('click', (e) => {
-        if (e.target.id === 'pm-backdrop') close();
-      });
-      root.querySelector('#pm-save').addEventListener('click', () => {
-        syncDraftFromInputs();
-        Store.upsertProfile(draft);
-        close();
-        appApi.toast(`Profil "${draft.name}" enregistré`);
-      });
-    }
-
-    renderModalContent();
+    const goSketch = () => Store.setActiveTab('tab2');
+    container.querySelector('#btn-go-sketch')?.addEventListener('click', goSketch);
+    container.querySelector('#btn-go-sketch-top')?.addEventListener('click', goSketch);
   }
 
   global.PlacoTab1 = { render };

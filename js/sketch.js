@@ -40,7 +40,8 @@
   }
 
   function wallProfile(proj, wall) {
-    return (proj.profiles || []).find((p) => p.id === wall.profileId) || (proj.profiles || [])[0];
+    if (!wall || !wall.profileId) return null;
+    return (proj.profiles || []).find((p) => p.id === wall.profileId) || null;
   }
 
   /**
@@ -828,8 +829,9 @@
           </div>
 
           <div class="field">
-            <label>Profil d'ouvrage assigné (DTU 25.41)</label>
+            <label>Gabarit d'ouvrage assigné (DTU 25.41)</label>
             <select id="wi-profile" class="select">
+              <option value="" ${!wall.profileId ? 'selected' : ''}>— Non affecté (exclu du calcul) —</option>
               ${wallProfiles.map((p) => `<option value="${esc(p.id)}" ${wall.profileId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
             </select>
           </div>
@@ -1155,7 +1157,7 @@
         Store.updateWall(selectedWall.id, { name: e.target.value.trim() || selectedWall.name });
       });
       container.querySelector('#wi-profile')?.addEventListener('change', (e) => {
-        Store.updateWall(selectedWall.id, { profileId: e.target.value });
+        Store.updateWall(selectedWall.id, { profileId: e.target.value || null });
       });
       container.querySelector('#wi-length')?.addEventListener('change', (e) => {
         const cm = Math.max(20, Math.min(3000, Number(e.target.value) || selectedWall.lengthCm));

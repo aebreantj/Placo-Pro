@@ -19,6 +19,10 @@
     return Math.round((Number(v) || 0) * 10) / 10;
   }
 
+  function compEnabled(profile, key) {
+    return !profile || !profile.components || profile.components[key] !== false;
+  }
+
   /**
    * Calcule la hauteur du mur (en cm) à une abscisse x (en cm) avec interpolation linéaire (rampant/pignon).
    */
@@ -500,32 +504,40 @@
         activeVerticals.push({ x: jp.x, h: localH, type: 'jamb' });
       });
 
-      const f530Ml = round2((totalF530Cm / 100) * 1.05);
-      const f530Bars = Math.ceil(f530Ml / 3.0);
+      const useF530 = compEnabled(profile, 'f530');
+      const useLisses = compEnabled(profile, 'lisses');
+      const useAppuis = compEnabled(profile, 'appuis');
+
+      const f530Ml = useF530 ? round2((totalF530Cm / 100) * 1.05) : 0;
+      const f530Bars = useF530 ? Math.ceil(f530Ml / 3.0) : 0;
+      const finalLisseMl = useLisses ? lisseMl : 0;
+      const finalLisseBars = useLisses ? lisseBars : 0;
+      const finalAppuis = useAppuis ? appuisCount : 0;
+      const finalEclisses = useF530 ? eclissesCount : 0;
       const optimaRange = profile.optimaRange || C.suggestOptimaRange(profile.insulation && profile.insulation.thicknessMm);
 
       // Chevilles à frapper : 1 tous les 60 cm sur lisses haute/basse + 1 par appui Optima
-      const chevillesCount = Math.ceil((topEdgeCm + bottomTrackCm) / 60) + appuisCount;
+      const chevillesCount = (useLisses ? Math.ceil((topEdgeCm + bottomTrackCm) / 60) : 0) + finalAppuis;
       // Vis TRPF 13 : raccordements linteaux/allèges + éclisses
-      const trpfCount = openings.length * 8 + eclissesCount * 2;
+      const trpfCount = useF530 ? (openings.length * 8 + finalEclisses * 2) : 0;
 
       return {
         system: 'optima',
         optimaRange,
         entraxeCm: entraxe,
-        lisseMl,
-        lisseBars,
+        lisseMl: finalLisseMl,
+        lisseBars: finalLisseBars,
         f530Ml,
         f530Bars,
-        appuisCount,
-        eclissesCount,
+        appuisCount: finalAppuis,
+        eclissesCount: finalEclisses,
         railMl: 0,
         railBars: 0,
         montantMl: 0,
         montantBars: 0,
-        studPositions: activeVerticals,
+        studPositions: useF530 ? activeVerticals : [],
         bottomTrackMl: round2(bottomTrackCm / 100),
-        resilientTapeMl: 0, // pas de bande résiliente obligatoire sous doublage optima (lisse clip)
+        resilientTapeMl: 0,
         chevillesCount,
         trpfCount
       };
@@ -612,22 +624,29 @@
       });
     });
 
-    const montantMl = round2((totalMontantCm / 100) * 1.05);
-    const montantBars = Math.ceil(montantMl / 3.0);
+    const useRails = compEnabled(profile, 'rails');
+    const useMontants = compEnabled(profile, 'montants');
+    const useResiliente = compEnabled(profile, 'bandeResiliente');
 
-    // Bande résiliente acoustique sous rails bas de cloisons (et haut si cloison)
-    const resilientTapeMl = profile.category === 'cloison' ? round2(bottomTrackCm / 100) : 0;
+    const finalRailMl = useRails ? railMl : 0;
+    const finalRailBars = useRails ? railBars : 0;
+    const montantMl = useMontants ? round2((totalMontantCm / 100) * 1.05) : 0;
+    const montantBars = useMontants ? Math.ceil(montantMl / 3.0) : 0;
+
+    // Bande résiliente acoustique sous rails bas de cloisons (si cochée)
+    const resilientTapeMl = (profile.category === 'cloison' && useResiliente) ? round2(bottomTrackCm / 100) : 0;
 
     // Chevilles à frapper : 1 tous les 60 cm sur rail haut et rail bas (hors passages de porte)
-    const chevillesCount = Math.ceil(topEdgeCm / 60) + Math.ceil(bottomTrackCm / 60) + 2;
+    const chevillesCount = useRails ? (Math.ceil(topEdgeCm / 60) + Math.ceil(bottomTrackCm / 60) + 2) : 0;
+    const finalTrpfCount = (useRails || useMontants) ? trpfCount : 0;
 
     return {
       system: 'ossature',
       section,
       entraxeCm: entraxe,
       montantType: profile.montantType || 'simple',
-      railMl,
-      railBars,
+      railMl: finalRailMl,
+      railBars: finalRailBars,
       montantMl,
       montantBars,
       lisseMl: 0,
@@ -636,11 +655,11 @@
       f530Bars: 0,
       appuisCount: 0,
       eclissesCount: 0,
-      studPositions,
+      studPositions: useMontants ? studPositions : [],
       bottomTrackMl: round2(bottomTrackCm / 100),
       resilientTapeMl,
       chevillesCount,
-      trpfCount,
+      trpfCount: finalTrpfCount,
       openingCount: openings.length,
       avgHeightCm: round1(avgH),
       maxHeightCm: round1(maxH)
@@ -889,27 +908,43 @@
         cx = nx;
       }
     }
+    const useF530 = compEnabled(profile, 'f530');
+    const usePeriph = compEnabled(profile, 'periph');
+    const useSuspentes = compEnabled(profile, 'suspentes');
+    const useParement = compEnabled(profile, 'faceA');
+
     // Si la pièce n'est pas rectangulaire (aire réelle < bbox), ajuster proportionnellement avec 6% de chute
     const bboxAreaM2 = (lengthCm * widthCm) / 10000;
     const shapeFactor = bboxAreaM2 > 0 ? clamp(areaM2 / bboxAreaM2, 0.4, 1.0) : 1;
     const platesPerSkinAdj = Math.max(Math.ceil((areaM2 * 1.07) / plateAreaM2), Math.round(platesPerSkin * shapeFactor));
-    const totalPlates = platesPerSkinAdj * skins;
-    const orderedAreaM2 = round2(totalPlates * plateAreaM2);
-    const wastePct = orderedAreaM2 > 0 ? round1(((orderedAreaM2 - areaM2 * skins) / orderedAreaM2) * 100) : 0;
+    const totalPlates = useParement ? (platesPerSkinAdj * skins) : 0;
+    const orderedAreaM2 = useParement ? round2(totalPlates * plateAreaM2) : 0;
+    const wastePct = (useParement && orderedAreaM2 > 0) ? round1(((orderedAreaM2 - areaM2 * skins) / orderedAreaM2) * 100) : 0;
 
     // Bandes papier : joints entre plaques + cueillie périphérique plafond/murs
-    const bandePapierMl = round2((ceilingJointsCm / 100) + perimeterMl);
+    const bandePapierMl = useParement ? round2((ceilingJointsCm / 100) + perimeterMl) : 0;
 
     // Vis TTPC : 13.5 vis/m² par peau
-    const ttpc25 = Math.ceil(areaM2 * 13.5);
-    const ttpc35 = skins >= 2 ? Math.ceil(areaM2 * 13.5) : 0;
-    const trpf13 = eclissesCount * 2 + numFurrings * 2;
+    const ttpc25 = useParement ? Math.ceil(areaM2 * 13.5) : 0;
+    const ttpc35 = (useParement && skins >= 2) ? Math.ceil(areaM2 * 13.5) : 0;
+    const finalF530Ml = useF530 ? f530Ml : 0;
+    const finalF530Bars = useF530 ? f530Bars : 0;
+    const finalEclisses = useF530 ? eclissesCount : 0;
+    const finalPeriphMl = usePeriph ? periphMl : 0;
+    const finalPeriphBars = usePeriph ? periphBars : 0;
+    const finalSuspentes = useSuspentes ? suspentesCount : 0;
+    const finalSuspPerM2 = (useSuspentes && areaM2 > 0) ? suspentesPerM2 : 0;
+    const finalTigesMl = useSuspentes ? tigesM6Ml : 0;
+    const finalTigesBars = useSuspentes ? tigesM6Bars1m : 0;
+    const finalChevilles = (usePeriph ? Math.ceil((perimeterMl * 100) / 60) : 0) + (useSuspentes && suspenteType === 'classique_tige' ? finalSuspentes : 0);
+    const trpf13 = useF530 ? (finalEclisses * 2 + numFurrings * 2) : 0;
 
     return {
       profile,
       lengthCm: round1(lengthCm),
       widthCm: round1(widthCm),
       areaM2,
+      netParementAreaM2: useParement ? areaM2 * skins : 0,
       perimeterMl,
       polygon,
       entraxeCm,
@@ -917,23 +952,23 @@
       suspenteType,
       integraLength,
       plenumCm,
-      furringYPositions,
-      suspenteXPositions,
-      boardTiles,
-      numFurrings,
-      f530Ml,
-      f530Bars,
-      periphMl,
-      periphBars,
-      eclissesCount,
-      suspentesCount,
-      suspentesPerM2,
-      tigesM6Ml,
-      tigesM6Bars1m,
-      chevillesCount,
+      furringYPositions: useF530 ? furringYPositions : [],
+      suspenteXPositions: useSuspentes ? suspenteXPositions : [],
+      boardTiles: useParement ? boardTiles : [],
+      numFurrings: useF530 ? numFurrings : 0,
+      f530Ml: finalF530Ml,
+      f530Bars: finalF530Bars,
+      periphMl: finalPeriphMl,
+      periphBars: finalPeriphBars,
+      eclissesCount: finalEclisses,
+      suspentesCount: finalSuspentes,
+      suspentesPerM2: finalSuspPerM2,
+      tigesM6Ml: finalTigesMl,
+      tigesM6Bars1m: finalTigesBars,
+      chevillesCount: finalChevilles,
       plateType,
       plateHeightCm: plateH,
-      skins,
+      skins: useParement ? skins : 0,
       totalPlates,
       orderedAreaM2,
       wastePct,
@@ -1053,9 +1088,9 @@
       insulationMap[key].netAreaM2 = round2(insulationMap[key].netAreaM2 + netAreaM2);
     }
 
-    // 1. Calcul mur par mur
+    // 1. Calcul mur par mur (uniquement les murs affectés à un gabarit actif)
     walls.forEach((wall) => {
-      const profile = profilesById[wall.profileId] || profiles[0];
+      const profile = wall.profileId ? profilesById[wall.profileId] : null;
       if (!profile) return;
 
       const grossAreaM2 = round2(computeWallGrossAreaM2(wall));
@@ -1066,7 +1101,7 @@
       totalOpeningsCount += (wall.openings || []).length;
 
       // Vérifications / conseils DTU 25.41
-      if (profile.category === 'cloison' && profile.section === 'M48' && maxH > 260 && profile.montantType !== 'double') {
+      if (profile.category === 'cloison' && profile.section === 'M48' && maxH > 260 && profile.montantType !== 'double' && compEnabled(profile, 'montants')) {
         dtuAlerts.push({
           level: 'warning',
           wallId: wall.id,
@@ -1074,7 +1109,7 @@
           message: `DTU 25.41 : ${wall.name} (H = ${maxH} cm) en M48 simple dépasse 2,60 m. Envisagez des montants M48 doublés dos à dos ou une ossature M70.`
         });
       }
-      if (profile.category === 'doublage' && profile.doublageSystem === 'optima' && profile.insulation && profile.insulation.enabled) {
+      if (profile.category === 'doublage' && profile.doublageSystem === 'optima' && profile.insulation && profile.insulation.enabled && compEnabled(profile, 'appuis')) {
         const rangeObj = C.OPTIMA_RANGES.find((r) => r.id === profile.optimaRange);
         if (rangeObj && profile.insulation.thicknessMm > rangeObj.maxInsulMm) {
           dtuAlerts.push({
@@ -1086,13 +1121,19 @@
         }
       }
 
-      // Simuler chaque face et chaque peau
+      // Simuler chaque face cochée et chaque peau
       const facesToCalc = [];
       if (profile.category === 'cloison') {
-        facesToCalc.push({ key: 'faceA', label: 'Face A', spec: profile.faceA || { skins: 1, plateType: 'std', plateHeight: 'auto' } });
-        facesToCalc.push({ key: 'faceB', label: 'Face B', spec: profile.faceB || { skins: 1, plateType: 'std', plateHeight: 'auto' } });
+        if (compEnabled(profile, 'faceA')) {
+          facesToCalc.push({ key: 'faceA', label: 'Face A', spec: profile.faceA || { skins: 1, plateType: 'std', plateHeight: 'auto' } });
+        }
+        if (compEnabled(profile, 'faceB')) {
+          facesToCalc.push({ key: 'faceB', label: 'Face B', spec: profile.faceB || { skins: 1, plateType: 'std', plateHeight: 'auto' } });
+        }
       } else {
-        facesToCalc.push({ key: 'faceA', label: 'Face Parement', spec: profile.faceA || { skins: 1, plateType: 'std', plateHeight: 'auto' } });
+        if (compEnabled(profile, 'faceA')) {
+          facesToCalc.push({ key: 'faceA', label: 'Face Parement', spec: profile.faceA || { skins: 1, plateType: 'std', plateHeight: 'auto' } });
+        }
       }
 
       const faceCalepinages = [];
@@ -1158,15 +1199,21 @@
         totalLisseClipMl += framing.lisseMl;
         totalLisseClipBars += framing.lisseBars;
         totalEclissesF530 += framing.eclissesCount;
-        optimaAppuisMap[framing.optimaRange] = (optimaAppuisMap[framing.optimaRange] || 0) + framing.appuisCount;
+        if (framing.appuisCount > 0) {
+          optimaAppuisMap[framing.optimaRange] = (optimaAppuisMap[framing.optimaRange] || 0) + framing.appuisCount;
+        }
       } else {
         const sec = framing.section;
-        if (!railsMap[sec]) railsMap[sec] = { section: sec, ml: 0, bars: 0 };
-        if (!montantsMap[sec]) montantsMap[sec] = { section: sec, ml: 0, bars: 0 };
-        railsMap[sec].ml = round2(railsMap[sec].ml + framing.railMl);
-        railsMap[sec].bars += framing.railBars;
-        montantsMap[sec].ml = round2(montantsMap[sec].ml + framing.montantMl);
-        montantsMap[sec].bars += framing.montantBars;
+        if (framing.railMl > 0) {
+          if (!railsMap[sec]) railsMap[sec] = { section: sec, ml: 0, bars: 0 };
+          railsMap[sec].ml = round2(railsMap[sec].ml + framing.railMl);
+          railsMap[sec].bars += framing.railBars;
+        }
+        if (framing.montantMl > 0) {
+          if (!montantsMap[sec]) montantsMap[sec] = { section: sec, ml: 0, bars: 0 };
+          montantsMap[sec].ml = round2(montantsMap[sec].ml + framing.montantMl);
+          montantsMap[sec].bars += framing.montantBars;
+        }
       }
 
       totalTrpf13 += framing.trpfCount;
@@ -1205,8 +1252,9 @@
       });
     });
 
-    // 2. Angles rentrants / sortants du plan
-    const corners = detectPlanCorners(walls);
+    // 2. Angles rentrants / sortants du plan (uniquement si murs affectés avec parement actif)
+    const activeParementWalls = wallResults.filter((wr) => wr.faceCalepinages.length > 0).map((wr) => wr.wall);
+    const corners = detectPlanCorners(activeParementWalls);
     totalBandePapierMl += corners.insideCornersMl;
     totalBandeArmeeMl += corners.outsideCornersMl;
 
@@ -1216,7 +1264,7 @@
     if (ceilingResult) {
       addPlates(ceilingResult.plateType, ceilingResult.plateHeightCm, ceilingResult.totalPlates);
       totalPlatesCount += ceilingResult.totalPlates;
-      totalNetSurfaceM2 += ceilingResult.areaM2 * ceilingResult.skins;
+      totalNetSurfaceM2 += ceilingResult.netParementAreaM2 != null ? ceilingResult.netParementAreaM2 : (ceilingResult.areaM2 * ceilingResult.skins);
       totalOrderedPlateAreaM2 += ceilingResult.orderedAreaM2;
 
       totalF530Ml += ceilingResult.f530Ml;

@@ -210,111 +210,120 @@
     }
   };
 
-  // Profils d'ouvrages DTU 25.41 par défaut réutilisables sur le plan
+  // Profils d'ouvrages DTU 25.41 par défaut (1 gabarit clair par colonne, variantes ajoutables à volonté)
   function createDefaultProfiles() {
     return [
       {
-        id: 'prof-cloison-72-48',
+        id: 'prof-cloison-a',
         category: 'cloison',
-        name: 'Cloison 72/48 — BA13 Std + Coton 50',
-        color: '#E2E8F0',
+        name: 'Cloison — Variante A',
+        color: '#38BDF8',
         section: 'M48',
         entraxeCm: 60,
         montantType: 'simple',
+        components: {
+          rails: true,
+          montants: true,
+          faceA: true,
+          faceB: true,
+          bandeResiliente: true
+        },
         faceA: { skins: 1, plateType: 'std', plateHeight: 'auto' },
         faceB: { skins: 1, plateType: 'std', plateHeight: 'auto' },
         insulation: { enabled: true, material: 'laine_coton', thicknessMm: 50 }
       },
       {
-        id: 'prof-cloison-98-70-phon',
-        category: 'cloison',
-        name: 'Cloison 98/70 — Acoustique / Hydro SdB',
-        color: '#38BDF8',
+        id: 'prof-doublage-a',
+        category: 'doublage',
+        name: 'Doublage — Variante A',
+        color: '#F5C518',
+        doublageSystem: 'optima',
         section: 'M70',
         entraxeCm: 60,
         montantType: 'simple',
-        faceA: { skins: 1, plateType: 'acoustique', plateHeight: 'auto' },
-        faceB: { skins: 1, plateType: 'hydro', plateHeight: 'auto' },
-        insulation: { enabled: true, material: 'laine_coton', thicknessMm: 60 }
-      },
-      {
-        id: 'prof-cloison-98-48-dp',
-        category: 'cloison',
-        name: 'Cloison 98/48 Double Peau — Phonique',
-        color: '#818CF8',
-        section: 'M48',
-        entraxeCm: 60,
-        montantType: 'double',
-        faceA: { skins: 2, plateType: 'std', plateHeight: 'auto' },
-        faceB: { skins: 2, plateType: 'std', plateHeight: 'auto' },
-        insulation: { enabled: true, material: 'laine_coton', thicknessMm: 50 }
-      },
-      {
-        id: 'prof-doublage-optima-100',
-        category: 'doublage',
-        name: 'Doublage Optima 2 — Coton 100 + BA13 Std',
-        color: '#F5C518',
-        doublageSystem: 'optima',
-        section: 'M48',
-        entraxeCm: 60,
-        montantType: 'simple',
         optimaRange: '75-120',
+        components: {
+          f530: true,
+          lisses: true,
+          appuis: true,
+          rails: true,
+          montants: true,
+          faceA: true
+        },
         faceA: { skins: 1, plateType: 'std', plateHeight: 'auto' },
         insulation: { enabled: true, material: 'laine_coton', thicknessMm: 100 }
       },
       {
-        id: 'prof-doublage-optima-hydro',
-        category: 'doublage',
-        name: 'Doublage Optima 2 — Coton 80 + BA13 Hydro',
-        color: '#22C55E',
-        doublageSystem: 'optima',
-        section: 'M48',
-        entraxeCm: 60,
-        montantType: 'simple',
-        optimaRange: '75-120',
-        faceA: { skins: 1, plateType: 'hydro', plateHeight: 'auto' },
-        insulation: { enabled: true, material: 'laine_coton', thicknessMm: 80 }
-      },
-      {
-        id: 'prof-doublage-indep-70',
-        category: 'doublage',
-        name: 'Doublage Ossature M70 — Coton 80 + BA13 Std',
-        color: '#FB923C',
-        doublageSystem: 'independant',
-        section: 'M70',
-        entraxeCm: 60,
-        montantType: 'simple',
-        optimaRange: '75-120',
-        faceA: { skins: 1, plateType: 'std', plateHeight: 'auto' },
-        insulation: { enabled: true, material: 'laine_coton', thicknessMm: 80 }
-      },
-      {
-        id: 'prof-plafond-integra',
+        id: 'prof-plafond-a',
         category: 'plafond',
-        name: 'Faux Plafond F530 — Integra 2 + Coton 200',
-        color: '#38BDF8',
+        name: 'Faux Plafond — Variante A',
+        color: '#22C55E',
         entraxeCm: 50,
         periphType: 'CR2',
         suspenteType: 'integra2',
         integraLength: '200-240',
         plenumCm: 25,
+        components: {
+          f530: true,
+          periph: true,
+          suspentes: true,
+          faceA: true
+        },
         faceA: { skins: 1, plateType: 'std', plateHeight: 'auto' },
         insulation: { enabled: true, material: 'laine_coton', thicknessMm: 200 }
-      },
-      {
-        id: 'prof-plafond-classique',
-        category: 'plafond',
-        name: 'Faux Plafond F530 — Suspentes Bois + BA13 Hydro',
-        color: '#22C55E',
-        entraxeCm: 60,
-        periphType: 'CR2',
-        suspenteType: 'classique_bois',
-        integraLength: '160-200',
-        plenumCm: 15,
-        faceA: { skins: 1, plateType: 'hydro', plateHeight: 'auto' },
-        insulation: { enabled: true, material: 'laine_coton', thicknessMm: 100 }
       }
     ];
+  }
+
+  function createBlankVariant(category, index) {
+    const letter = String.fromCharCode(65 + (index % 26));
+    const palette = ['#38BDF8', '#F5C518', '#22C55E', '#A78BFA', '#FB923C', '#F43F5E', '#2DD4BF'];
+    const color = palette[index % palette.length];
+    if (category === 'cloison') {
+      return {
+        id: 'prof-cl-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 5),
+        category: 'cloison',
+        name: `Cloison — Variante ${letter}`,
+        color,
+        section: 'M70',
+        entraxeCm: 60,
+        montantType: 'simple',
+        components: { rails: true, montants: true, faceA: true, faceB: true, bandeResiliente: true },
+        faceA: { skins: 1, plateType: 'std', plateHeight: 'auto' },
+        faceB: { skins: 1, plateType: 'std', plateHeight: 'auto' },
+        insulation: { enabled: true, material: 'laine_coton', thicknessMm: 60 }
+      };
+    }
+    if (category === 'doublage') {
+      return {
+        id: 'prof-db-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 5),
+        category: 'doublage',
+        name: `Doublage — Variante ${letter}`,
+        color,
+        doublageSystem: 'optima',
+        section: 'M70',
+        entraxeCm: 60,
+        montantType: 'simple',
+        optimaRange: '45-75',
+        components: { f530: true, lisses: true, appuis: true, rails: true, montants: true, faceA: true },
+        faceA: { skins: 1, plateType: 'hydro', plateHeight: 'auto' },
+        insulation: { enabled: true, material: 'laine_coton', thicknessMm: 60 }
+      };
+    }
+    return {
+      id: 'prof-pl-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 5),
+      category: 'plafond',
+      name: `Faux Plafond — Variante ${letter}`,
+      color,
+      entraxeCm: 60,
+      periphType: 'CR2',
+      suspenteType: 'classique_bois',
+      integraLength: '160-200',
+      plenumCm: 20,
+      components: { f530: true, periph: true, suspentes: true, faceA: true },
+      faceA: { skins: 1, plateType: 'hydro', plateHeight: 'auto' },
+      insulation: { enabled: true, material: 'laine_coton', thicknessMm: 100 }
+    };
   }
 
   // Chantier totalement vierge (état initial systématique à l'ouverture)
@@ -335,7 +344,7 @@
       walls: [],
       ceiling: {
         enabled: false,
-        profileId: 'prof-plafond-integra',
+        profileId: 'prof-plafond-a',
         autoFromPlan: true,
         customLengthCm: 0,
         customWidthCm: 0
@@ -403,6 +412,7 @@
     INSULATION_THICKNESSES_CEILING,
     OPENING_TYPES,
     createDefaultProfiles,
+    createBlankVariant,
     createBlankProject,
     suggestPlateHeight,
     suggestOptimaRange,
