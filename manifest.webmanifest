@@ -1,0 +1,22 @@
+{
+  "id": "./",
+  "name": "Placo Pro — Relevé, Calepinage & Chiffrage DTU 25.41",
+  "short_name": "Placo Pro",
+  "description": "Application professionnelle hors-ligne pour le relevé de croquis, le calepinage réel et le chiffrage complet des matériaux de plâtrerie sèche selon le DTU 25.41.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0B111A",
+  "theme_color": "#F5C518",
+  "lang": "fr",
+  "categories": ["business", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "./icons/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0B111A" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Placo Pro — Relevé, Calepinage Réel &amp; Chiffrage DTU 25.41</title>
+  <meta name="description" content="Application web professionnelle pour le relevé de croquis terrain/PC, le calepinage réel plaque par plaque et le chiffrage complet des matériaux de plâtrerie sèche selon le DTU 25.41." />
+  <link rel="icon" type="image/svg+xml" href="icons/logo.svg" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <!-- ==================== EN-TÊTE PRINCIPAL ==================== -->
+  <header class="app-header">
+    <div class="header-bar">
+      <div class="brand">
+        <img src="icons/logo.svg" alt="Logo Placo Pro" class="brand-logo" />
+        <div class="brand-text">
+          <div class="brand-title">
+            PLACO <span class="accent">PRO</span>
+            <span class="dtu-pill">DTU 25.41</span>
+          </div>
+          <div class="brand-sub">Relevé terrain • Calepinage réel • Chiffrage plâtrerie sèche</div>
+        </div>
+      </div>
+
+      <div class="header-project-pill" title="Chantier actif">
+        <span class="dot-live" aria-hidden="true"></span>
+        <span class="header-project-name" id="header-project-name">Chargement...</span>
+      </div>
+
+      <div class="header-kpis" id="header-kpis">
+        <div class="mini-kpi">
+          <span class="mini-kpi-label">Plaques</span>
+          <span class="mini-kpi-val" id="kpi-top-plates">0</span>
+        </div>
+        <div class="mini-kpi">
+          <span class="mini-kpi-label">Surface nette</span>
+          <span class="mini-kpi-val blue" id="kpi-top-area">0 m²</span>
+        </div>
+        <div class="mini-kpi">
+          <span class="mini-kpi-label">Chute réelle</span>
+          <span class="mini-kpi-val" id="kpi-top-waste">0 %</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <input type="file" id="global-import-json" accept=".json,application/json" style="display:none" />
+        <button type="button" class="btn btn-sm btn-primary" id="btn-top-blank" title="Tout remettre à zéro et démarrer un nouveau chantier vierge">
+          ✨ Nouveau chantier vierge
+        </button>
+        <button type="button" class="btn btn-sm btn-hide-mobile" id="btn-top-import" title="Importer un fichier projet .json">
+          📂 Importer
+        </button>
+        <button type="button" class="btn btn-sm btn-blue btn-hide-mobile" id="btn-top-export" title="Exporter le projet en .json">
+          💾 .json
+        </button>
+        <button type="button" class="btn btn-sm btn-hide-mobile" id="btn-top-pdf" title="Exporter / Imprimer la fiche chantier PDF">
+          🖨️ PDF
+        </button>
+      </div>
+    </div>
+
+    <!-- Navigation 4 onglets (Desktop / Tablette) -->
+    <nav class="main-nav" aria-label="Navigation principale">
+      <div class="nav-tabs" id="desktop-tabs">
+        <button type="button" class="nav-tab active" data-tab="tab1">
+          <span class="tab-num">1</span>
+          <span>Chantier &amp; Paramètres</span>
+        </button>
+        <button type="button" class="nav-tab" data-tab="tab2">
+          <span class="tab-num">2</span>
+          <span>Croquis &amp; Ouvertures</span>
+        </button>
+        <button type="button" class="nav-tab" data-tab="tab3">
+          <span class="tab-num">3</span>
+          <span>Calepinage &amp; Détails</span>
+        </button>
+        <button type="button" class="nav-tab" data-tab="tab4">
+          <span class="tab-num">4</span>
+          <span>Liste de Commande</span>
+        </button>
+      </div>
+
+      <div class="save-status" id="save-status">
+        <span>● Hors-ligne prêt</span>
+      </div>
+    </nav>
+  </header>
+
+  <!-- ==================== CONTENU PRINCIPAL ==================== -->
+  <main class="app-main" id="app-main" role="main"></main>
+
+  <!-- ==================== NAVIGATION MOBILE BAS ==================== -->
+  <nav class="mobile-bottom-nav" id="mobile-tabs" aria-label="Navigation mobile">
+    <button type="button" class="mobile-nav-btn active" data-tab="tab1">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      <span>1. Chantier</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-tab="tab2">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+      <span>2. Croquis</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-tab="tab3">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="18"/><rect x="14" y="3" width="7" height="10"/><rect x="14" y="17" width="7" height="4"/></svg>
+      <span>3. Calepinage</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-tab="tab4">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
+      <span>4. Commande</span>
+    </button>
+  </nav>
+
+  <!-- ==================== MODALES, PAVÉ NUMÉRIQUE & IMPRESSION ==================== -->
+  <div id="modal-root"></div>
+  <div id="keypad-root"></div>
+  <div id="print-sheet" aria-hidden="true"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- Scripts modulaires (zéro dépendance externe, 100% hors-ligne) -->
+  <script src="js/constants.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/ui-tab1.js"></script>
+  <script src="js/sketch.js"></script>
+  <script src="js/calepinage.js"></script>
+  <script src="js/order.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
